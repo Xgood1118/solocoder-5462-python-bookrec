@@ -53,40 +53,44 @@ class HybridRecommender:
         sorted_scores = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)
         return sorted_scores[:top_n]
 
+    def _get_book_category(self, book_id: str) -> str:
+        book = self.storage.get_book(book_id)
+        return book.category if book else ""
+
     def _apply_diversity(self, items: List[RecommendItem], window: int = 3) -> List[RecommendItem]:
         if len(items) < window:
             return items
 
         result: List[RecommendItem] = []
         remaining = list(items)
-        allow_two_consecutive = False
+        degrade_level = 0
 
         while remaining and len(result) < len(items):
             found = False
             for i, item in enumerate(remaining):
-                book = self.storage.get_book(item.book_id)
-                if not book:
-                    continue
+                category = self._get_book_category(item.book_id)
+                if not category:
+                    result.append(item)
+                    remaining.pop(i)
+                    found = True
+                    break
 
-                category = book.category
+                max_consecutive = window - 1 - degrade_level
+                if max_consecutive < 1:
+                    max_consecutive = 1
 
-                if not allow_two_consecutive and len(result) >= window - 1:
-                    last_categories = [
-                        self.storage.get_book(r.book_id).category
-                        for r in result[-(window - 1):]
-                        if self.storage.get_book(r.book_id)
-                    ]
-                    if len(last_categories) == window - 1 and all(c == category for c in last_categories):
-                        continue
-
-                if allow_two_consecutive and len(result) >= 2:
-                    last_categories = [
-                        self.storage.get_book(r.book_id).category
-                        for r in result[-2:]
-                        if self.storage.get_book(r.book_id)
-                    ]
-                    if len(last_categories) == 2 and all(c == category for c in last_categories):
-                        if i < len(remaining) - 1:
+                if len(result) >= max_consecutive:
+                    last_cats = [self._get_book_category(r.book_id) for r in result[-max_consecutive:]]
+                    if all(c == category for c in last_cats if c):
+                        has_alternative = any(
+                            self._get_book_category(r.book_id) != category
+                            for r in remaining[i + 1:]
+                            if self._get_book_category(r.book_id)
+                        )
+                        if has_alternative:
+                            continue
+                        elif degrade_level < window - 2:
+                            degrade_level += 1
                             continue
 
                 result.append(item)
@@ -95,8 +99,8 @@ class HybridRecommender:
                 break
 
             if not found:
-                if not allow_two_consecutive:
-                    allow_two_consecutive = True
+                if degrade_level < window - 2:
+                    degrade_level += 1
                 else:
                     if remaining:
                         result.extend(remaining)
@@ -183,8 +187,14 @@ class HybridRecommender:
                 for i, b in enumerate(hot_books[:top_n])
             ]
 
-        if user.interest_tags:
-            tag_recs = self.content.recommend_by_tags(user.interest_tags, top_n=top_n * 2)
+        effective_tags = list(user.interest_tags)
+
+        if not effective_tags and user.borrow_history:
+            tag_counter = get_user_tags(user)
+            effective_tags = [tag for tag, _ in tag_counter.most_common(10)]
+
+        if effective_tags:
+            tag_recs = self.content.recommend_by_tags(effective_tags, top_n=top_n * 2)
             items = []
             for book_id, score in tag_recs:
                 items.append(RecommendItem(
@@ -193,13 +203,8 @@ class HybridRecommender:
                     source=RecSource.cold_start,
                     reason="基于您的兴趣标签推荐"
                 ))
-            if not items:
-                hot_books = self.storage.get_hot_books(top_n)
-                items = [
-                    RecommendItem(book_id=b.book_id, score=0.5, source=RecSource.hot, reason="热门推荐")
-                    for b in hot_books[:top_n]
-                ]
-            return items[:top_n]
+            if items:
+                return items[:top_n]
 
         hot_books = self.storage.get_hot_books(top_n)
         return [
@@ -223,20 +228,23 @@ class HybridRecommender:
         user = self.storage.get_user(user_id)
 
         if not user:
-            items = self._cold_start_recommend(user_id, top_n)
-            return items, "user_not_found_hot"
+            items = self._cold_start_recommend(user_id, top_n * 3)
+            items = self._apply_diversity(items, window=self.settings.diversity_window)
+            return items[:top_n], "user_not_found_hot"
 
         if user.is_new_user or len(user.borrow_history) == 0:
-            items = self._cold_start_recommend(user_id, top_n)
-            return items, "cold_start"
+            items = self._cold_start_recommend(user_id, top_n * 3)
+            items = self._apply_diversity(items, window=self.settings.diversity_window)
+            return items[:top_n], "cold_start"
 
         if self.cf.is_invalid_user(user_id):
-            hot_books = self.storage.get_hot_books(top_n)
+            hot_books = self.storage.get_hot_books(top_n * 3)
             items = [
                 RecommendItem(book_id=b.book_id, score=1.0 - i * 0.01, source=RecSource.hot, reason="热门推荐")
-                for i, b in enumerate(hot_books[:top_n])
+                for i, b in enumerate(hot_books[:top_n * 3])
             ]
-            return items, "invalid_user_hot"
+            items = self._apply_diversity(items, window=self.settings.diversity_window)
+            return items[:top_n], "invalid_user_hot"
 
         hybrid_scores = self._get_hybrid_scores(user_id, top_n=top_n * 5)
 
