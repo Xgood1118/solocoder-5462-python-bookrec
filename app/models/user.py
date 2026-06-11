@@ -3,6 +3,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
+from app.models.feedback import FeedbackType
+
 
 class Gender(str, Enum):
     male = "male"
@@ -15,15 +17,9 @@ class CollectionType(str, Enum):
     read = "read"
 
 
-class FeedbackType(str, Enum):
-    like = "like"
-    dislike = "dislike"
-    already_read = "already_read"
-
-
 class BorrowRecord(BaseModel):
     book_id: str
-    borrow_time: datetime
+    borrow_time: datetime = Field(default_factory=datetime.now)
     return_time: Optional[datetime] = None
     read_completion: float = Field(default=0.0, ge=0.0, le=1.0)
     read_duration: int = Field(default=0, ge=0)

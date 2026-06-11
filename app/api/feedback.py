@@ -18,22 +18,27 @@ class FeedbackRequest(BaseModel):
 
 @router.post("")
 def submit_feedback(req: FeedbackRequest):
-    storage = get_storage()
-    if not storage.get_user(req.user_id):
-        raise HTTPException(status_code=404, detail="User not found")
-    if not storage.get_book(req.book_id):
-        raise HTTPException(status_code=404, detail="Book not found")
+    try:
+        storage = get_storage()
+        if not storage.get_user(req.user_id):
+            raise HTTPException(status_code=404, detail="User not found")
+        if not storage.get_book(req.book_id):
+            raise HTTPException(status_code=404, detail="Book not found")
 
-    feedback_mgr = get_feedback_manager()
-    fb = UserFeedback(
-        user_id=req.user_id,
-        book_id=req.book_id,
-        feedback_type=req.feedback_type,
-        rec_source=req.rec_source,
-    )
-    feedback_mgr.add_feedback(fb)
+        feedback_mgr = get_feedback_manager()
+        fb = UserFeedback(
+            user_id=req.user_id,
+            book_id=req.book_id,
+            feedback_type=req.feedback_type,
+            rec_source=req.rec_source,
+        )
+        feedback_mgr.add_feedback(fb)
 
-    return {"status": "ok", "message": "Feedback recorded"}
+        return {"status": "ok", "message": "Feedback recorded", "feedback_type": req.feedback_type.value}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Feedback error: {str(e)}")
 
 
 @router.get("/{user_id}/summary", response_model=FeedbackAggregate)

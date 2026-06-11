@@ -9,6 +9,18 @@ class FeedbackType(str, Enum):
     dislike = "dislike"
     already_read = "already_read"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            mapping = {
+                "喜欢": "like",
+                "不感兴趣": "dislike",
+                "已读过": "already_read",
+            }
+            if value in mapping:
+                return cls(mapping[value])
+        return None
+
 
 class UserFeedback(BaseModel):
     user_id: str

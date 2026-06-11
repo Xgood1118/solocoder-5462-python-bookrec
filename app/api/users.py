@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
-from typing import List
-from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel, Field
 
 from app.models.user import UserProfile, Gender, BorrowRecord
 from app.storage.memory_store import get_storage
@@ -11,9 +12,9 @@ router = APIRouter(prefix="/users", tags=["users"])
 class UserCreateRequest(BaseModel):
     user_id: str
     username: str
-    age: int | None = None
-    gender: Gender | None = None
-    occupation: str | None = None
+    age: Optional[int] = None
+    gender: Optional[Gender] = None
+    occupation: Optional[str] = None
 
 
 class InterestTagsRequest(BaseModel):
@@ -22,10 +23,13 @@ class InterestTagsRequest(BaseModel):
 
 class BorrowRequest(BaseModel):
     book_id: str
-    read_completion: float = 0.0
-    read_duration: int = 0
-    rating: float | None = None
-    comment: str | None = None
+    borrow_time: Optional[datetime] = None
+    return_time: Optional[datetime] = None
+    read_completion: float = Field(default=0.0, ge=0.0, le=1.0)
+    read_duration: int = Field(default=0, ge=0)
+    rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    comment: Optional[str] = None
+    borrow_count: int = Field(default=1, ge=1)
 
 
 @router.get("/{user_id}", response_model=UserProfile)
@@ -66,35 +70,43 @@ def set_interest_tags(user_id: str, req: InterestTagsRequest):
 
 @router.post("/{user_id}/borrow", response_model=UserProfile)
 def borrow_book(user_id: str, req: BorrowRequest):
-    storage = get_storage()
-    user = storage.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    book = storage.get_book(req.book_id)
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
+    try:
+        storage = get_storage()
+        user = storage.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        book = storage.get_book(req.book_id)
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
 
-    record = BorrowRecord(
-        book_id=req.book_id,
-        read_completion=req.read_completion,
-        read_duration=req.read_duration,
-        rating=req.rating,
-        comment=req.comment,
-    )
-    storage.add_borrow_record(user_id, record)
+        record = BorrowRecord(
+            book_id=req.book_id,
+            borrow_time=req.borrow_time or datetime.now(),
+            return_time=req.return_time,
+            read_completion=req.read_completion,
+            read_duration=req.read_duration,
+            rating=req.rating,
+            comment=req.comment,
+            borrow_count=req.borrow_count,
+        )
+        storage.add_borrow_record(user_id, record)
 
-    if req.rating is not None:
-        if book.avg_rating is None:
-            book.avg_rating = req.rating
-            book.rating_count = 1
-        else:
-            total = book.avg_rating * book.rating_count + req.rating
-            book.rating_count += 1
-            book.avg_rating = total / book.rating_count
-    book.borrow_count += 1
-    book.is_new_book = False
+        if req.rating is not None:
+            if book.avg_rating is None:
+                book.avg_rating = req.rating
+                book.rating_count = 1
+            else:
+                total = book.avg_rating * book.rating_count + req.rating
+                book.rating_count += 1
+                book.avg_rating = total / book.rating_count
+        book.borrow_count += 1
+        book.is_new_book = False
 
-    return user
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Borrow error: {str(e)}")
 
 
 @router.get("/{user_id}/borrow-history", response_model=List[BorrowRecord])
